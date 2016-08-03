@@ -6,6 +6,8 @@ import struct
 import time
 from . import common
 
+
+
 # メインオペレーター
 class export_cm3d2_model(bpy.types.Operator):
 	bl_idname = 'export_mesh.export_cm3d2_model'
@@ -46,12 +48,15 @@ class export_cm3d2_model(bpy.types.Operator):
 	
 	is_batch = bpy.props.BoolProperty(name="バッチモード", default=False, description="モードの切替やエラー個所の選択を行いません")
 	
-	def report_cancel(self, report_message, report_type={'ERROR'}, return_dict={'CANCELLED'}):
+
+	def report_cancel(self, report_message, report_type={'ERROR'}, resobj={'CANCELLED'}):
+		"""エラーメッセージを出力してキャンセルオブジェクトを返す"""
 		self.report(type=report_type, message=report_message)
-		return return_dict
+		return resobj
 	
+
 	def precheck(self, context):
-		# データの成否チェック
+		"""データの成否チェック"""
 		ob = context.active_object
 		if not ob:
 			return self.report_cancel("アクティブオブジェクトがありません")
@@ -76,7 +81,8 @@ class export_cm3d2_model(bpy.types.Operator):
 		if 65535 < len(me.vertices):
 			return self.report_cancel("エクスポート可能な頂点数を大幅に超えています、最低でも65535未満には削減してください")
 		return None
-		
+	
+
 	def invoke(self, context, event):
 		res = self.precheck(context)
 		if res: return res
@@ -116,7 +122,8 @@ class export_cm3d2_model(bpy.types.Operator):
 		self.scale = 1.0 / common.preferences().scale
 		context.window_manager.fileselect_add(self)
 		return {'RUNNING_MODAL'}
-	
+
+
 	# 'is_batch' がオンなら非表示
 	def draw(self, context):
 		self.layout.prop(self, 'scale')
@@ -147,8 +154,10 @@ class export_cm3d2_model(bpy.types.Operator):
 		sub_box = box.box()
 		sub_box.prop(self, 'is_normalize_weight', icon='MOD_VERTEX_WEIGHT')
 		sub_box.prop(self, 'is_convert_bone_weight_names', icon_value=common.preview_collections['main']['KISS'].icon_id)
-	
+
+
 	def execute(self, context):
+		"""モデルファイルを出力"""
 		start_time = time.time()
 		
 		if not self.is_batch:
@@ -342,7 +351,9 @@ class export_cm3d2_model(bpy.types.Operator):
 		self.report(type={'INFO'}, message="modelのエクスポートが完了しました")
 		return {'FINISHED'}
 
+
 	def write_model(self, context, file, bone_data, local_bone_data, local_bone_names):
+		"""モデルデータをファイルオブジェクトに書き込む"""
 		ob = context.active_object
 		me = ob.data
 		
@@ -703,6 +714,8 @@ class export_cm3d2_model(bpy.types.Operator):
 						file.write(struct.pack('<3f', -normal.x, normal.y, normal.z))
 			context.blend_data.meshes.remove(temp_me)
 		common.write_str(file, 'end')
+
+
 
 # メニューを登録する関数
 def menu_func(self, context):
