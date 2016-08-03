@@ -158,9 +158,13 @@ class import_cm3d2_model(bpy.types.Operator):
 		comparison_counter = Counter(comparison_data)
 		comparison_data = list((comparison_counter[h] > 1) for h in comparison_data)
 		del comparison_counter
-		unknown_count = struct.unpack('<i', file.read(4))[0]
-		for i in range(unknown_count):
-			struct.unpack('<4f', file.read(4*4))
+		
+		# 接線ベクトル情報読み込み
+		tangent_count = struct.unpack('<i', file.read(4))[0]
+		for i in range(tangent_count):
+			vertex_data[i]['tangent'] = struct.unpack('<4f', file.read(4*4))
+		
+		# ウェイト情報読み込み
 		for i in range(vertex_count):
 			indexes = struct.unpack('<4H', file.read(2*4))
 			values  = struct.unpack('<4f', file.read(4*4))

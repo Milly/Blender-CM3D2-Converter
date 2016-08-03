@@ -426,10 +426,14 @@ class export_cm3d2_model(bpy.types.Operator):
 				file.write(struct.pack('<3f', -no.x, no.y, no.z))
 				file.write(struct.pack('<2f', uv.x, uv.y))
 		context.window_manager.progress_update(6)
+
+		# 接線ベクトル情報を書き出し
+		tangent_count = 0
+		file.write(struct.pack('<i', tangent_count))
+
 		# ウェイト情報を書き出し
 		is_over_one = 0
 		is_under_one = 0
-		file.write(struct.pack('<i', 0))
 		progress_plus_value = 1.0 / len(me.vertices)
 		progress_count = 6.0
 		progress_reduce = len(me.vertices) // 200 + 1
