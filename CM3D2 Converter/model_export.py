@@ -341,8 +341,7 @@ class export_cm3d2_model(bpy.types.Operator):
 		try:
 			file = common.open_temporary(self.filepath, 'wb', is_backup=self.is_backup)
 		except:
-			self.report(type={'ERROR'}, message="ファイルを開くのに失敗しました、アクセス不可の可能性があります")
-			return {'CANCELLED'}
+			return self.report_cancel("ファイルを開くのに失敗しました、アクセス不可の可能性があります")
 		
 		model_datas = {
 			'bone_data': bone_data,
@@ -353,8 +352,7 @@ class export_cm3d2_model(bpy.types.Operator):
 			with file:
 				self.write_model(context, file, **model_datas)
 		except common.CM3D2ExportException as e:
-			self.report(type={'ERROR'}, message=str(e))
-			return {'CANCELLED'}
+			return self.report_cancel(str(e))
 		
 		# モディファイアを適用する場合
 		if self.is_apply_modifiers:
