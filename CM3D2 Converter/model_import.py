@@ -1,9 +1,5 @@
-import bmesh
-import bpy
-import math
-import mathutils
-import struct
-import time
+import bpy, bmesh, mathutils
+import math, struct, time, os
 from collections import Counter
 from . import common
 
@@ -33,12 +29,15 @@ class import_cm3d2_model(bpy.types.Operator):
 	is_mate_data_text = bpy.props.BoolProperty(name="テキストにマテリアル情報埋め込み", default=True, description="シェーダー情報をテキストに埋め込みます")
 	
 	is_armature = bpy.props.BoolProperty(name="アーマチュア生成", default=True, description="ウェイトを編集する時に役立つアーマチュアを読み込みます")
-	is_armature_clean = bpy.props.BoolProperty(name="不要なボーンを削除", default=True, description="ウェイトが無いボーンを削除します")
-	is_armature_arrange = bpy.props.BoolProperty(name="アーマチュア整頓", default=True, description="ボーンを分かりやすい向きに変更します")
+	is_armature_clean = bpy.props.BoolProperty(name="不要なボーンを削除", default=False, description="ウェイトが無いボーンを削除します")
 	
 	is_bone_data_text = bpy.props.BoolProperty(name="テキスト", default=True, description="ボーン情報をテキストとして読み込みます")
 	is_bone_data_obj_property = bpy.props.BoolProperty(name="オブジェクトのカスタムプロパティ", default=True, description="メッシュオブジェクトのカスタムプロパティにボーン情報を埋め込みます")
 	is_bone_data_arm_property = bpy.props.BoolProperty(name="アーマチュアのカスタムプロパティ", default=True, description="アーマチュアデータのカスタムプロパティにボーン情報を埋め込みます")
+	
+	@classmethod
+	def poll(cls, context):
+		return True
 	
 	def invoke(self, context, event):
 		if common.preferences().model_default_path:
@@ -74,7 +73,6 @@ class import_cm3d2_model(bpy.types.Operator):
 		sub_box = box.box()
 		sub_box.label("アーマチュア")
 		sub_box.prop(self, 'is_armature_clean', icon='X')
-		sub_box.prop(self, 'is_armature_arrange', icon='HAIR')
 		sub_box.prop(self, 'is_convert_bone_weight_names', icon='BLENDER', text="ボーン名をBlender用に変換")
 		box = self.layout.box()
 		box.label("ボーン情報埋め込み場所")
@@ -158,15 +156,11 @@ class import_cm3d2_model(bpy.types.Operator):
 		comparison_counter = Counter(comparison_data)
 		comparison_data = list((comparison_counter[h] > 1) for h in comparison_data)
 		del comparison_counter
-		
-		# 接線ベクトル情報読み込み
-		tangent_count = struct.unpack('<i', file.read(4))[0]
-		for i in range(tangent_count):
-			vertex_data[i]['tangent'] = struct.unpack('<4f', file.read(4*4))
-		
-		# ウェイト情報読み込み
+		unknown_count = struct.unpack('<i', file.read(4))[0]
+		for i in range(unknown_count):
+			struct.unpack('<4f', file.read(4*4))
 		for i in range(vertex_count):
-			indexes = struct.unpack('<4H', file.read(2*4))
+			indexes = struct.unpack('<4H', file.read(4*2))
 			values  = struct.unpack('<4f', file.read(4*4))
 			vertex_data[i]['weights'] = list({
 					'index': index,
@@ -179,7 +173,7 @@ class import_cm3d2_model(bpy.types.Operator):
 		face_data = []
 		for i in range(mesh_count):
 			face_count = int(struct.unpack('<i', file.read(4))[0] / 3)
-			face_data.append([struct.unpack('<3H', file.read(3*2)) for j in range(face_count)])
+			face_data.append([tuple(reversed(struct.unpack('<3H', file.read(3*2)))) for j in range(face_count)])
 		context.window_manager.progress_update(0.6)
 		
 		# マテリアル情報読み込み
@@ -248,101 +242,98 @@ class import_cm3d2_model(bpy.types.Operator):
 			bpy.context.scene.objects.active = arm_ob
 			bpy.ops.object.mode_set(mode='EDIT')
 			
+			# 基幹ボーンのみ作成
 			child_data = []
 			for data in bone_data:
 				if not data['parent_name']:
 					bone = arm.edit_bones.new(common.decode_bone_name(data['name'], self.is_convert_bone_weight_names))
-					bone.head = (0, 0, 0)
-					bone.tail = (0, 1, 0)
+					bone.head, bone.tail = (0, 0, 0), (0, 1, 0)
 					
-					co = data['co'].copy()
-					co.x, co.y, co.z = -co.x, -co.z, co.y
-					co *= self.scale
-					
-					rot = mathutils.Euler((0, math.radians(0), 0)).to_quaternion()
-					rot = rot * data['rot'].copy()
-					rot.x, rot.y, rot.z, rot.w = -rot.x, -rot.z, rot.y, -rot.w
-					q = mathutils.Quaternion((0, 0, 1), math.radians(-90))
-					rot = rot * q
+					co = data['co'].copy() * self.scale
+					rot = data['rot']
 					
 					co_mat = mathutils.Matrix.Translation(co)
 					rot_mat = rot.to_matrix().to_4x4()
-					bone.matrix = co_mat * rot_mat
+					mat = co_mat * rot_mat
 					
-					co = bone.tail - bone.head
-					#co.x, co.y, co.z = -co.y, co.x, co.z
-					#bone.tail = bone.head + co
+					fix_mat_scale = mathutils.Matrix.Scale(-1, 4, (1, 0, 0))
+					fix_mat_before = mathutils.Euler((math.radians(90), 0, 0), 'XYZ').to_matrix().to_4x4()
+					fix_mat_after = mathutils.Euler((0, 0, math.radians(90)), 'XYZ').to_matrix().to_4x4()
 					
-					if data['unknown']:
-						bone.layers[16] = True
-						bone.layers[0] = False
+					bone.matrix = fix_mat_scale * fix_mat_before * mat * fix_mat_after
+					
+					if data['unknown']: bone["UnknownFlag"] = 1
+					else: bone["UnknownFlag"] = 0
 				else:
 					child_data.append(data)
-			context.window_manager.progress_update(1.2)
+			context.window_manager.progress_update(1.333)
 			
-			for i in range(9**9):
-				if len(child_data) <= 0:
-					break
+			# 子ボーンを追加していく
+			while len(child_data):
 				data = child_data.pop(0)
 				if common.decode_bone_name(data['parent_name'], self.is_convert_bone_weight_names) in arm.edit_bones:
 					bone = arm.edit_bones.new(common.decode_bone_name(data['name'], self.is_convert_bone_weight_names))
 					parent = arm.edit_bones[common.decode_bone_name(data['parent_name'], self.is_convert_bone_weight_names)]
 					bone.parent = parent
-					if data['unknown']:
-						bone.bbone_segments = 2
-					bone.head = (0, 0, 0)
-					bone.tail = (0, 1, 0)
+					bone.head, bone.tail = (0, 0, 0), (0, 1, 0)
 					
-					rots = []
-					temp_parent = bone
-					co = mathutils.Vector()
-					rot = mathutils.Euler((0, math.radians(0), 0)).to_quaternion()
-					for j in range(9**9):
+					parent_mats = []
+					current_bone = bone
+					while current_bone:
 						for b in bone_data:
-							if common.decode_bone_name(b['name'], self.is_convert_bone_weight_names) == temp_parent.name:
-								c = b['co'].copy()
-								r = b['rot'].copy()
+							if common.decode_bone_name(b['name'], self.is_convert_bone_weight_names) == current_bone.name:
+								local_co = b['co'].copy()
+								local_rot = b['rot'].copy()
 								break
 						
-						co = r * co
-						co += c
+						local_co_mat = mathutils.Matrix.Translation(local_co)
+						local_rot_mat = local_rot.to_matrix().to_4x4()
+						parent_mats.append(local_co_mat * local_rot_mat)
 						
-						r.x, r.y, r.z, r.w = -r.x, -r.z, r.y, -r.w
-						rots.append(r.copy())
-						
-						if temp_parent.parent == None:
-							break
-						temp_parent = temp_parent.parent
-					co.x, co.y, co.z = -co.x, -co.z, co.y
-					co *= self.scale
+						current_bone = current_bone.parent
+					parent_mats.reverse()
 					
-					rots.reverse()
-					rot = mathutils.Euler((0, math.radians(0), 0)).to_quaternion()
-					for r in rots:
-						rot = rot * r
-					q = mathutils.Quaternion((0, 0, 1), math.radians(-90))
-					rot = rot * q
+					mat = mathutils.Matrix()
+					for local_mat in parent_mats:
+						mat *= local_mat
+					mat *= self.scale
 					
-					co_mat = mathutils.Matrix.Translation(co)
-					rot_mat = rot.to_matrix().to_4x4()
+					fix_mat_scale = mathutils.Matrix.Scale(-1, 4, (1, 0, 0))
+					fix_mat_before = mathutils.Euler((math.radians(90), 0, 0), 'XYZ').to_matrix().to_4x4()
+					fix_mat_after = mathutils.Euler((0, 0, math.radians(90)), 'XYZ').to_matrix().to_4x4()
 					
-					bone.matrix = co_mat * rot_mat
+					bone.matrix = fix_mat_scale * fix_mat_before * mat * fix_mat_after
 					
-					if data['unknown']:
-						bone.layers[16] = True
-						bone.layers[0] = False
+					if data['unknown']: bone["UnknownFlag"] = 1
+					else: bone["UnknownFlag"] = 0
 				else:
 					child_data.append(data)
-			context.window_manager.progress_update(1.3)
+			context.window_manager.progress_update(1.666)
 			
-			# ボーン整頓1
-			if self.is_armature_arrange:
-				has_child = []
-				for bone in arm.edit_bones:
-					if len(bone.children) == 1:
-						co = bone.children[0].head - bone.head
-						bone.length = co.length
-						has_child.append(bone.name)
+			# ボーン整頓
+			for bone in arm.edit_bones:
+				if len(bone.children) == 0:
+					if bone.parent:
+						pass
+					else:
+						bone.length = 0.2 * self.scale
+				elif len(bone.children) == 1:
+					co = bone.children[0].head - bone.head
+					bone.length = co.length
+				elif len(bone.children) >= 2:
+					if bone.parent:
+						max_len = 0.0
+						for child_bone in bone.children:
+							co = child_bone.head - bone.head
+							if max_len < co.length:
+								max_len = co.length
+						bone.length = max_len
+					else:
+						bone.length = 0.2 * self.scale
+			for bone in arm.edit_bones:
+				if len(bone.children) == 0:
+					if bone.parent:
+						bone.length = bone.parent.length * 0.5
 			
 			# 一部ボーン削除
 			if self.is_armature_clean:
@@ -353,26 +344,6 @@ class import_cm3d2_model(bpy.types.Operator):
 							break
 					else:
 						arm.edit_bones.remove(bone)
-			
-			# ボーン整頓2
-			if self.is_armature_arrange:
-				for bone in arm.edit_bones:
-					if len(bone.children) == 0 and bone.name in has_child:
-						pass
-					elif 1 == len(bone.children):
-						co = bone.children[0].head - bone.head
-						bone.length = co.length
-					elif 2 <= len(bone.children):
-						total = mathutils.Vector()
-						for child in bone.children:
-							total += child.head - bone.head
-						co = total / len(bone.children)
-						bone.length = co.length
-					else:
-						if bone.parent:
-							bone.length = 0.1
-						else:
-							bone.length = 1.0
 			
 			arm.layers[16] = True
 			arm.draw_type = 'STICK'
@@ -392,7 +363,7 @@ class import_cm3d2_model(bpy.types.Operator):
 				co[1] *= self.scale
 				co[2] *= self.scale
 				verts.append(co)
-			context.window_manager.progress_update(2.2)
+			context.window_manager.progress_update(2.25)
 			for data in face_data:
 				faces.extend(data)
 			context.window_manager.progress_update(2.5)
@@ -403,7 +374,7 @@ class import_cm3d2_model(bpy.types.Operator):
 			ob.select = True
 			context.scene.objects.active = ob
 			bpy.ops.object.shade_smooth()
-			context.window_manager.progress_update(2.7)
+			context.window_manager.progress_update(2.75)
 			# オブジェクト変形
 			for bone in bone_data:
 				if bone['name'] == model_name2:
@@ -424,13 +395,13 @@ class import_cm3d2_model(bpy.types.Operator):
 			# 頂点グループ作成
 			for data in local_bone_data:
 				ob.vertex_groups.new(common.decode_bone_name(data['name'], self.is_convert_bone_weight_names))
-			context.window_manager.progress_update(3.3)
+			context.window_manager.progress_update(3.333)
 			for vert_index, data in enumerate(vertex_data):
 				for weight in data['weights']:
 					if 0.0 < weight['value']:
 						vertex_group = ob.vertex_groups[common.decode_bone_name(weight['name'], self.is_convert_bone_weight_names)]
 						vertex_group.add([vert_index], weight['value'], 'REPLACE')
-			context.window_manager.progress_update(3.7)
+			context.window_manager.progress_update(3.666)
 			if self.is_vertex_group_sort:
 				bpy.ops.object.vertex_group_sort(sort_type='NAME')
 			if self.is_remove_empty_vertex_group:
@@ -554,11 +525,6 @@ class import_cm3d2_model(bpy.types.Operator):
 			context.window_manager.progress_update(7)
 			
 			# メッシュ整頓
-			bpy.ops.object.mode_set(mode='EDIT')
-			bpy.ops.mesh.select_all(action='SELECT')
-			bpy.ops.mesh.flip_normals()
-			bpy.ops.mesh.select_all(action='DESELECT')
-			bpy.ops.object.mode_set(mode='OBJECT')
 			if self.is_remove_doubles:
 				for is_comparison, vert in zip(comparison_data, me.vertices):
 					if is_comparison:
@@ -678,11 +644,17 @@ class import_cm3d2_model(bpy.types.Operator):
 			ob['BaseBone'] = model_name2
 		if self.is_armature and self.is_bone_data_arm_property:
 			arm['BaseBone'] = model_name2
-		
 		context.window_manager.progress_end()
-		diff_time = time.time() - start_time
-		self.report(type={'INFO'}, message=str(round(diff_time, 1)) + " Seconds")
-		self.report(type={'INFO'}, message="modelのインポートが完了しました")
+		
+		require_time_str = str(round(time.time() - start_time, 1))
+		filesize = os.path.getsize(self.filepath)
+		filesize_str = str(filesize) + " バイト"
+		if 1024 * 1024 < filesize:
+			filesize_str = str(round(filesize / (1024 * 1024.0), 1)) + " MB"
+		elif 1024 < filesize:
+			filesize_str = str(round(filesize / 1024.0, 1)) + " KB"
+		self.report(type={'INFO'}, message="modelのインポートが完了しました (" + filesize_str + " / " + require_time_str + " 秒)")
+		
 		return {'FINISHED'}
 
 # メニューを登録する関数
